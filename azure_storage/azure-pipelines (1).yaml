@@ -1,0 +1,159 @@
+# Starter pipeline
+# Start with a minimal pipeline that you can customize to build and deploy your code.
+# Add steps that build, run tests, deploy, and more:
+# https://aka.ms/yaml
+
+trigger:
+- develop
+
+pool:
+  vmImage: ubuntu-latest
+
+stages:
+- stage: build
+  jobs:
+    - job: build
+      steps:
+      - task: CopyFiles@2
+        inputs:
+          SourceFolder: '.'
+          Contents: |
+            **/*.tf
+          TargetFolder: $(Build.ArtifactStagingDirectory)
+          CleanTargetFolder: true
+      - publish: $(Build.ArtifactStagingDirectory)
+        artifact: terraform-azurerm-falcon
+- stage: DEV_Plan
+  variables:
+    - group: terraform-azurerm-falcon-dev-variables
+  jobs:
+    - deployment: DEV_Plan
+      environment: terraform-azurerm-falcon-dev-plan
+      strategy:
+        runOnce:
+          deploy:
+            steps:
+              - download: current
+                artifact: terraform-azurerm-falcon
+                patterns: '**/*'
+              - task: charleszipp.azure-pipelines-tasks-terraform.azure-pipelines-tasks-terraform-installer.TerraformInstaller@0
+                name: InstallTerraform
+                inputs:
+                  terraformVersion: $(terraformVersion)
+              - task: TerraformCLI@0
+                name: InitTerraform
+                inputs:
+                  command: 'init'
+                  backendServiceArm: 'SP_FALCON_DEV'
+                  commandOptions: 
+                    -backend-config="access_key=$(storage_account_access_key)"
+                    -backend-config="storage_account_name=$(backendAzureRmStorageAccountName)"
+                    -backend-config="container_name=$(backendAzureRmContainerName)"
+                    -backend-config="key=terraform.tfstate"
+                  allowTelemetryCollection: true
+                  workingDirectory: $(Agent.BuildDirectory)/terraform-azurerm-falcon
+              - task: TerraformCLI@0
+                name: PlanTerraform
+                env:
+                  TF_VAR_POSTGRES_PASSWORD: $(TF_VAR_POSTGRES_PASSWORD)
+                  TF_VAR_POSTGRES_USERNAME: $(TF_VAR_POSTGRES_USERNAME)
+                inputs:
+                  command: 'plan'
+                  environmentServiceName: 'SP_FALCON_DEV'
+                  allowTelemetryCollection: true
+                  workingDirectory: $(Agent.BuildDirectory)/terraform-azurerm-falcon
+                  commandOptions: -out tfplan
+                  publishPlanResults: 'PlanResultSit'
+              - task: CmdLine@2
+                name: RemoveTempFiles
+                inputs:
+                  script: 'rm -rf $(Agent.BuildDirectory)/terraform-azurerm-falcon/.terraform'
+              - publish: $(Agent.BuildDirectory)/terraform-azurerm-falcon
+                artifact: tfplan-dev
+- stage: SIT_Plan
+  variables:
+    - group: terraform-azurerm-falcon-sit-variables
+  jobs:
+    - deployment: SIT_Plan
+      environment: terraform-azurerm-falcon-sit-plan
+      strategy:
+        runOnce:
+          deploy:
+            steps:
+              - download: current
+                artifact: terraform-azurerm-falcon
+                patterns: '**/*'
+              - task: charleszipp.azure-pipelines-tasks-terraform.azure-pipelines-tasks-terraform-installer.TerraformInstaller@0
+                name: InstallTerraform
+                inputs:
+                  terraformVersion: $(terraformVersion)
+              - task: TerraformCLI@0
+                name: InitTerraform
+                inputs:
+                  command: 'init'
+                  backendServiceArm: 'SP_FALCON_SIT'
+                  commandOptions: 
+                    -backend-config="access_key=$(storage_account_access_key)"
+                    -backend-config="storage_account_name=$(backendAzureRmStorageAccountName)"
+                    -backend-config="container_name=$(backendAzureRmContainerName)"
+                    -backend-config="key=terraform.tfstate"
+                  allowTelemetryCollection: true
+                  workingDirectory: $(Agent.BuildDirectory)/terraform-azurerm-falcon
+              - task: TerraformCLI@0
+                name: PlanTerraform
+                env:
+                  TF_VAR_POSTGRES_PASSWORD: $(TF_VAR_POSTGRES_PASSWORD)
+                  TF_VAR_POSTGRES_USERNAME: $(TF_VAR_POSTGRES_USERNAME)
+                inputs:
+                  command: 'plan'
+                  environmentServiceName: 'SP_FALCON_SIT'
+                  allowTelemetryCollection: true
+                  workingDirectory: $(Agent.BuildDirectory)/terraform-azurerm-falcon
+                  commandOptions: -out tfplan
+                  publishPlanResults: 'PlanResultSit'
+              - task: CmdLine@2
+                name: RemoveTempFiles
+                inputs:
+                  script: 'rm -rf $(Agent.BuildDirectory)/terraform-azurerm-falcon/.terraform'
+              - publish: $(Agent.BuildDirectory)/terraform-azurerm-falcon
+                artifact: tfplan-sit
+- stage: SIT_Apply
+  variables:
+    - group: terraform-azurerm-falcon-sit-variables
+  jobs:
+    - deployment: SIT_Apply
+      environment: terraform-azurerm-falcon-sit-apply
+      strategy:
+        runOnce:
+          deploy:
+            steps:
+              - download: current
+                artifact: tfplan-sit
+                patterns: '**/*'
+              - task: charleszipp.azure-pipelines-tasks-terraform.azure-pipelines-tasks-terraform-installer.TerraformInstaller@0
+                name: InstallTerraform
+                inputs:
+                  terraformVersion: $(terraformVersion)
+              - task: TerraformCLI@0
+                name: InitTerraform
+                inputs:
+                  command: 'init'
+                  backendServiceArm: 'SP_FALCON_SIT'
+                  commandOptions: 
+                    -backend-config="access_key=$(storage_account_access_key)"
+                    -backend-config="storage_account_name=$(backendAzureRmStorageAccountName)"
+                    -backend-config="container_name=$(backendAzureRmContainerName)"
+                    -backend-config="key=terraform.tfstate"
+                  allowTelemetryCollection: true
+                  workingDirectory: $(Agent.BuildDirectory)/tfplan-sit
+              - task: TerraformCLI@0
+                name: ApplyTerraform
+                env:
+                  TF_VAR_POSTGRES_PASSWORD: $(TF_VAR_POSTGRES_PASSWORD)
+                  TF_VAR_POSTGRES_USERNAME: $(TF_VAR_POSTGRES_USERNAME)
+                inputs:
+                  command: 'apply'
+                  environmentServiceName: 'SP_FALCON_SIT'
+                  allowTelemetryCollection: true
+                  workingDirectory: $(Agent.BuildDirectory)/tfplan-sit
+                  commandOptions: tfplan
