@@ -1,0 +1,79 @@
+resource "azurerm_cdn_frontdoor_profile" "front_door" {
+  name                = "afd-${var.pillar}-${var.env}-${var.region}-001"
+  resource_group_name = "${var.resource_group_name}"
+  sku_name            = "${var.location}"
+}
+
+resource "azurerm_cdn_frontdoor_endpoint" "endpoint" {
+  name                     = "fullcircle-${var.pillar}-develop"
+  cdn_frontdoor_profile_id = azurerm_cdn_frontdoor_profile.front_door.id
+}
+
+resource "azurerm_cdn_frontdoor_origin_group" "origin_group" {
+  name                     = "fullcircle-${var.pillar}-develop-og"
+  cdn_frontdoor_profile_id = azurerm_cdn_frontdoor_profile.front_door.id
+  session_affinity_enabled = false
+
+  load_balancing {
+    sample_size                 = 4
+    successful_samples_required = 3
+    additional_latency_in_milliseconds = 50
+  }
+
+  health_probe {
+    path                = "/"
+    request_type        = "HEAD"
+    protocol            = "Http"
+    interval_in_seconds = 100
+  }
+}
+
+resource "azurerm_cdn_frontdoor_origin" "blob_container_origin" {
+  name                          = "fullcircle-${var.pillar}-develop-or"
+  cdn_frontdoor_origin_group_id = azurerm_cdn_frontdoor_origin_group.origin_group.id
+
+  enabled                        = true
+  host_name                      = azurerm_storage_account.my_storage_account.primary_blob_host
+  http_port                      = 80
+  https_port                     = 443
+  origin_host_header             = azurerm_storage_account.my_storage_account.primary_blob_host
+  priority                       = 1
+  weight                         = 1000
+  certificate_name_check_enabled = true
+
+  private_link {
+    private_link_target_id = azurerm_storage_account.my_storage_account.id
+    target_type            = "web"
+    request_message        = "AFD-DEV"
+    location               = "${var.location}"
+  }
+}
+
+resource "azurerm_cdn_frontdoor_route" "my_route" {
+  name                          = "fullcircle-${var.pillar}-develop-rt"
+  cdn_frontdoor_endpoint_id     = azurerm_cdn_frontdoor_endpoint.endpoint.id
+  cdn_frontdoor_origin_group_id = azurerm_cdn_frontdoor_origin_group.origin_group.id
+  cdn_frontdoor_origin_ids      = [azurerm_cdn_frontdoor_origin.blob_container_origin.id]
+
+  supported_protocols       = ["Http", "Https"]
+  patterns_to_match         = ["/*", "/path"]
+  forwarding_protocol       = "MatchRequest"
+  link_to_default_domain    = true
+  https_redirect_enabled    = true
+  cdn_frontdoor_origin_path = local.front_door_origin_path
+
+  cdn_frontdoor_custom_domain_ids = [
+    azurerm_cdn_frontdoor_custom_domain.my_custom_domain.id
+   ]
+}
+
+resource "azurerm_cdn_frontdoor_custom_domain" "my_custom_domain" {
+  name                     = "fullcircle-falcon-develop.zurich.com"
+  cdn_frontdoor_profile_id = azurerm_cdn_frontdoor_profile.front_door.id
+  host_name                = var.custom_domain_name
+
+  tls {
+    certificate_type    = "ManagedCertificate"
+    minimum_tls_version = "TLS12"
+  }
+}
